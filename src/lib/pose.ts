@@ -1,6 +1,12 @@
-import { PoseLandmarker, type NormalizedLandmark } from '@mediapipe/tasks-vision'
+export interface PoseLandmark {
+  x: number
+  y: number
+  z: number
+  visibility?: number
+}
 
 export const LANDMARK_INDEX = {
+  nose: 0,
   leftShoulder: 11,
   rightShoulder: 12,
   leftElbow: 13,
@@ -29,33 +35,45 @@ const TRACKED_RIGHT_SIDE = [
   LANDMARK_INDEX.rightAnkle,
 ]
 
+const SKELETON_CONNECTIONS: Array<[number, number]> = [
+  [LANDMARK_INDEX.leftShoulder, LANDMARK_INDEX.rightShoulder],
+  [LANDMARK_INDEX.leftShoulder, LANDMARK_INDEX.leftElbow],
+  [LANDMARK_INDEX.leftElbow, LANDMARK_INDEX.leftWrist],
+  [LANDMARK_INDEX.rightShoulder, LANDMARK_INDEX.rightElbow],
+  [LANDMARK_INDEX.rightElbow, LANDMARK_INDEX.rightWrist],
+  [LANDMARK_INDEX.leftShoulder, LANDMARK_INDEX.leftHip],
+  [LANDMARK_INDEX.rightShoulder, LANDMARK_INDEX.rightHip],
+  [LANDMARK_INDEX.leftHip, LANDMARK_INDEX.rightHip],
+  [LANDMARK_INDEX.leftHip, LANDMARK_INDEX.leftKnee],
+  [LANDMARK_INDEX.leftKnee, LANDMARK_INDEX.leftAnkle],
+  [LANDMARK_INDEX.rightHip, LANDMARK_INDEX.rightKnee],
+  [LANDMARK_INDEX.rightKnee, LANDMARK_INDEX.rightAnkle],
+]
+
 export function drawPose(
   ctx: CanvasRenderingContext2D,
-  landmarks: NormalizedLandmark[] | undefined,
+  landmarks: PoseLandmark[] | undefined,
   width: number,
   height: number,
 ) {
-  ctx.clearRect(0, 0, width, height)
-
   if (!landmarks) {
     return
   }
 
-  ctx.lineWidth = Math.max(2, width * 0.0035)
-  ctx.strokeStyle = 'rgba(92, 249, 170, 0.82)'
-  ctx.fillStyle = 'rgba(247, 250, 252, 0.95)'
+  ctx.lineWidth = Math.max(3, width * 0.004)
 
-  for (const connection of PoseLandmarker.POSE_CONNECTIONS) {
-    const from = landmarks[connection.start]
-    const to = landmarks[connection.end]
+  for (const [start, end] of SKELETON_CONNECTIONS) {
+    const from = landmarks[start]
+    const to = landmarks[end]
 
     if (!isLandmarkVisible(from, 0.2) || !isLandmarkVisible(to, 0.2)) {
       continue
     }
 
+    ctx.strokeStyle = 'rgba(92, 249, 170, 0.9)'
     ctx.beginPath()
-    ctx.moveTo(from.x * width, from.y * height)
-    ctx.lineTo(to.x * width, to.y * height)
+    ctx.moveTo((1 - from.x) * width, from.y * height)
+    ctx.lineTo((1 - to.x) * width, to.y * height)
     ctx.stroke()
   }
 
@@ -64,9 +82,14 @@ export function drawPose(
       continue
     }
 
-    const x = landmark.x * width
+    const x = (1 - landmark.x) * width
     const y = landmark.y * height
-    const radius = Math.max(4, width * 0.006)
+    const radius = Math.max(5, width * 0.007)
+
+    ctx.fillStyle =
+      (landmark.visibility ?? 0) >= 0.5
+        ? 'rgba(247, 250, 252, 0.98)'
+        : 'rgba(255, 196, 107, 0.9)'
 
     ctx.beginPath()
     ctx.arc(x, y, radius, 0, Math.PI * 2)
@@ -74,11 +97,7 @@ export function drawPose(
   }
 }
 
-export function calculateAngle(
-  pointA: NormalizedLandmark,
-  pointB: NormalizedLandmark,
-  pointC: NormalizedLandmark,
-) {
+export function calculateAngle(pointA: PoseLandmark, pointB: PoseLandmark, pointC: PoseLandmark) {
   const vectorBA = {
     x: pointA.x - pointB.x,
     y: pointA.y - pointB.y,
@@ -103,17 +122,14 @@ export function calculateAngle(
   return Math.round((Math.acos(safeCosine) * 180) / Math.PI)
 }
 
-export function calculateSegmentAngleFromVertical(
-  lowerPoint: NormalizedLandmark,
-  upperPoint: NormalizedLandmark,
-) {
+export function calculateSegmentAngleFromVertical(lowerPoint: PoseLandmark, upperPoint: PoseLandmark) {
   const deltaX = upperPoint.x - lowerPoint.x
   const deltaY = upperPoint.y - lowerPoint.y
 
   return Math.round(Math.abs((Math.atan2(deltaX, -deltaY) * 180) / Math.PI))
 }
 
-export function getPrimarySide(landmarks: NormalizedLandmark[]) {
+export function getPrimarySide(landmarks: PoseLandmark[]) {
   const leftScore = averageVisibility(landmarks, TRACKED_LEFT_SIDE)
   const rightScore = averageVisibility(landmarks, TRACKED_RIGHT_SIDE)
 
@@ -121,27 +137,31 @@ export function getPrimarySide(landmarks: NormalizedLandmark[]) {
 }
 
 export function isLandmarkVisible(
-  landmark: NormalizedLandmark | undefined,
+  landmark: PoseLandmark | undefined,
   minimumVisibility = 0.5,
 ) {
   return Boolean(
     landmark &&
       Number.isFinite(landmark.x) &&
       Number.isFinite(landmark.y) &&
-      landmark.visibility >= minimumVisibility,
+      (landmark.visibility ?? 0) >= minimumVisibility,
   )
 }
 
-function averageVisibility(landmarks: NormalizedLandmark[], indices: number[]) {
+export function countVisibleLandmarks(landmarks: PoseLandmark[] | undefined, minimumVisibility = 0.15) {
+  return landmarks?.filter((lm) => isLandmarkVisible(lm, minimumVisibility)).length ?? 0
+}
+
+function averageVisibility(landmarks: PoseLandmark[], indices: number[]) {
   const visibleLandmarks = indices
     .map((index) => landmarks[index])
-    .filter((landmark): landmark is NormalizedLandmark => Boolean(landmark))
+    .filter((landmark): landmark is PoseLandmark => Boolean(landmark))
 
   if (visibleLandmarks.length === 0) {
     return 0
   }
 
-  const total = visibleLandmarks.reduce((sum, landmark) => sum + landmark.visibility, 0)
+  const total = visibleLandmarks.reduce((sum, lm) => sum + (lm.visibility ?? 0), 0)
 
   return total / visibleLandmarks.length
 }

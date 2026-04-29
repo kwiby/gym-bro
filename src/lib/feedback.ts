@@ -1,11 +1,10 @@
-import type { NormalizedLandmark } from '@mediapipe/tasks-vision'
-
 import {
   LANDMARK_INDEX,
   calculateAngle,
   calculateSegmentAngleFromVertical,
   getPrimarySide,
   isLandmarkVisible,
+  type PoseLandmark,
 } from './pose'
 
 export type ExerciseType = 'squat' | 'pushup'
@@ -44,7 +43,24 @@ export function createNoPoseAnalysis(exercise: ExerciseType): ExerciseAnalysis {
       title: 'Waiting for a clear side view',
       details: [
         'Keep your full body in frame.',
-        'Stand side-on to the camera so the joint angles are easier to read.',
+        'Stand a few steps back and keep your shoulders, hips, knees, and ankles visible.',
+      ],
+    },
+  }
+}
+
+function createPartialPoseAnalysis(exercise: ExerciseType): ExerciseAnalysis {
+  return {
+    exercise,
+    stage: 'unknown',
+    poseDetected: true,
+    metrics: [],
+    feedback: {
+      tone: 'neutral',
+      title: 'Pose found, but lower-body angles are still weak',
+      details: [
+        'Tracking is seeing some joints, but it needs a clearer full-body view to score form.',
+        'Move farther back and keep ankles and knees visible in the frame.',
       ],
     },
   }
@@ -52,7 +68,7 @@ export function createNoPoseAnalysis(exercise: ExerciseType): ExerciseAnalysis {
 
 export function analyzeExercise(
   exercise: ExerciseType,
-  landmarks: NormalizedLandmark[] | undefined,
+  landmarks: PoseLandmark[] | undefined,
 ) {
   if (!landmarks) {
     return createNoPoseAnalysis(exercise)
@@ -65,7 +81,7 @@ export function analyzeExercise(
   return analyzeSquat(landmarks)
 }
 
-function analyzeSquat(landmarks: NormalizedLandmark[]): ExerciseAnalysis {
+function analyzeSquat(landmarks: PoseLandmark[]): ExerciseAnalysis {
   const side = getPrimarySide(landmarks)
   const shoulder = landmarks[
     side === 'left' ? LANDMARK_INDEX.leftShoulder : LANDMARK_INDEX.rightShoulder
@@ -77,12 +93,12 @@ function analyzeSquat(landmarks: NormalizedLandmark[]): ExerciseAnalysis {
   ]
 
   if (
-    !isLandmarkVisible(shoulder, 0.3) ||
-    !isLandmarkVisible(hip, 0.3) ||
-    !isLandmarkVisible(knee, 0.3) ||
-    !isLandmarkVisible(ankle, 0.3)
+    !isLandmarkVisible(shoulder, 0.12) ||
+    !isLandmarkVisible(hip, 0.12) ||
+    !isLandmarkVisible(knee, 0.12) ||
+    !isLandmarkVisible(ankle, 0.12)
   ) {
-    return createNoPoseAnalysis('squat')
+    return createPartialPoseAnalysis('squat')
   }
 
   const kneeAngle = calculateAngle(hip, knee, ankle)
@@ -140,7 +156,7 @@ function analyzeSquat(landmarks: NormalizedLandmark[]): ExerciseAnalysis {
   }
 }
 
-function analyzePushup(landmarks: NormalizedLandmark[]): ExerciseAnalysis {
+function analyzePushup(landmarks: PoseLandmark[]): ExerciseAnalysis {
   const side = getPrimarySide(landmarks)
   const shoulder = landmarks[
     side === 'left' ? LANDMARK_INDEX.leftShoulder : LANDMARK_INDEX.rightShoulder
@@ -153,13 +169,13 @@ function analyzePushup(landmarks: NormalizedLandmark[]): ExerciseAnalysis {
   ]
 
   if (
-    !isLandmarkVisible(shoulder, 0.3) ||
-    !isLandmarkVisible(elbow, 0.3) ||
-    !isLandmarkVisible(wrist, 0.3) ||
-    !isLandmarkVisible(hip, 0.3) ||
-    !isLandmarkVisible(ankle, 0.3)
+    !isLandmarkVisible(shoulder, 0.12) ||
+    !isLandmarkVisible(elbow, 0.12) ||
+    !isLandmarkVisible(wrist, 0.12) ||
+    !isLandmarkVisible(hip, 0.12) ||
+    !isLandmarkVisible(ankle, 0.12)
   ) {
-    return createNoPoseAnalysis('pushup')
+    return createPartialPoseAnalysis('pushup')
   }
 
   const elbowAngle = calculateAngle(shoulder, elbow, wrist)

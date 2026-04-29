@@ -9,7 +9,7 @@ import {
   type ExerciseAnalysis,
   type ExerciseType,
 } from './lib/feedback'
-import { drawPose, isLandmarkVisible } from './lib/pose'
+import { countVisibleLandmarks, drawPose } from './lib/pose'
 
 const MEDIAPIPE_VERSION = '0.10.35'
 const MODEL_ASSET_PATH =
@@ -59,9 +59,9 @@ function App() {
           },
           runningMode: 'VIDEO',
           numPoses: 1,
-          minPoseDetectionConfidence: 0.55,
-          minPosePresenceConfidence: 0.55,
-          minTrackingConfidence: 0.55,
+          minPoseDetectionConfidence: 0.5,
+          minPosePresenceConfidence: 0.5,
+          minTrackingConfidence: 0.5,
         })
 
         if (disposed) {
@@ -110,10 +110,7 @@ function App() {
       return
     }
 
-    spokenCueRef.current = {
-      text: analysis.feedback.spokenCue,
-      at: now,
-    }
+    spokenCueRef.current = { text: analysis.feedback.spokenCue, at: now }
 
     const utterance = new SpeechSynthesisUtterance(analysis.feedback.spokenCue)
     utterance.rate = 1
@@ -206,7 +203,12 @@ function App() {
       const canvas = canvasRef.current
       const poseLandmarker = poseLandmarkerRef.current
 
-      if (!video || !canvas || !poseLandmarker || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+      if (
+        !video ||
+        !canvas ||
+        !poseLandmarker ||
+        video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA
+      ) {
         animationFrameRef.current = requestAnimationFrame(processFrame)
         return
       }
@@ -218,28 +220,40 @@ function App() {
 
       lastVideoTimeRef.current = video.currentTime
 
-      if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
-        canvas.width = video.videoWidth
-        canvas.height = video.videoHeight
+      const w = video.videoWidth
+      const h = video.videoHeight
+
+      if (canvas.width !== w || canvas.height !== h) {
+        canvas.width = w
+        canvas.height = h
       }
 
-      const context = canvas.getContext('2d')
+      const ctx = canvas.getContext('2d')
 
-      if (!context) {
+      if (!ctx) {
         animationFrameRef.current = requestAnimationFrame(processFrame)
         return
       }
 
-      const result = poseLandmarker.detectForVideo(video, video.currentTime * 1000)
-      const landmarks = result.landmarks[0]
-      const visibleCount = landmarks?.filter((landmark) => isLandmarkVisible(landmark, 0.15)).length ?? 0
+      // Draw mirrored video frame directly on canvas
+      ctx.save()
+      ctx.translate(w, 0)
+      ctx.scale(-1, 1)
+      ctx.drawImage(video, 0, 0, w, h)
+      ctx.restore()
 
-      drawPose(context, landmarks, canvas.width, canvas.height)
+      // Detect pose on the current frame
+      const result = poseLandmarker.detectForVideo(video, performance.now())
+      const landmarks = result.landmarks[0]
+      const visibleCount = countVisibleLandmarks(landmarks)
+
+      // Draw skeleton on top of the mirrored video (drawPose also mirrors x)
+      drawPose(ctx, landmarks, w, h)
 
       const nextAnalysis = analyzeExercise(selectedExerciseRef.current, landmarks)
       handleRepCounting(nextAnalysis)
       setLandmarkCount(visibleCount)
-      setPoseVisible(visibleCount >= 8)
+      setPoseVisible(visibleCount >= 6)
       setAnalysis(nextAnalysis)
 
       animationFrameRef.current = requestAnimationFrame(processFrame)
@@ -295,9 +309,15 @@ function App() {
                 type="button"
                 className="primary-button"
                 onClick={isCameraLive ? stopCamera : startCamera}
-                disabled={cameraStatus === 'starting' || modelStatus === 'loading'}
+                disabled={cameraStatus === 'starting' || modelStatus !== 'ready'}
               >
-                {isCameraLive ? 'Stop camera' : cameraStatus === 'starting' ? 'Starting...' : 'Start camera'}
+                {isCameraLive
+                  ? 'Stop camera'
+                  : cameraStatus === 'starting'
+                    ? 'Starting...'
+                    : modelStatus === 'loading'
+                      ? 'Loading model...'
+                      : 'Start camera'}
               </button>
               <button
                 type="button"
@@ -323,13 +343,20 @@ function App() {
           </div>
 
           <div className="camera-stage">
+            {/* Hidden video used only as source for canvas drawing and pose detection */}
             <video ref={videoRef} className="camera-layer" playsInline muted />
             <canvas ref={canvasRef} className="overlay-layer" />
 
             {!isCameraLive && (
               <div className="stage-overlay">
                 <p>Camera preview will appear here.</p>
-                <span>Use a side view and keep your full body visible for the best tracking.</span>
+                <span>
+                  {modelStatus === 'loading'
+                    ? 'Loading pose model — takes a moment on first visit.'
+                    : modelStatus === 'error'
+                      ? modelError
+                      : 'Use a side view and keep your full body visible for the best tracking.'}
+                </span>
               </div>
             )}
           </div>
@@ -340,13 +367,13 @@ function App() {
             <article className="status-card">
               <span className="label">Model</span>
               <strong>{modelStatus}</strong>
-              <p>{modelError || 'MediaPipe Pose Landmarker is used for real-time tracking.'}</p>
+              <p>{modelError || 'MediaPipe Pose Landmarker — real-time in-browser tracking.'}</p>
             </article>
 
             <article className="status-card">
               <span className="label">Camera</span>
               <strong>{cameraStatus}</strong>
-              <p>{cameraError || 'Front camera feed is processed directly in the browser.'}</p>
+              <p>{cameraError || 'Front camera processed directly in the browser.'}</p>
             </article>
 
             <article className="status-card compact">
@@ -399,19 +426,19 @@ function App() {
                   </div>
                 ))
               ) : (
-                <p className="empty-copy">Angles will appear once the model can see a clear pose.</p>
+                <p className="empty-copy">
+                  Angles will appear once the model can see a clear pose.
+                </p>
               )}
             </div>
           </article>
 
           <article className="notes-card">
-            <span className="label">Current MVP scope</span>
+            <span className="label">Tips</span>
             <ul>
-              <li>Camera feed</li>
-              <li>Pose detection model</li>
-              <li>Skeleton and keypoint overlay</li>
-              <li>Joint-angle and phase calculations</li>
-              <li>Rule-based feedback with optional spoken cues</li>
+              <li>Stand side-on to the camera for squats and pushups.</li>
+              <li>Keep your full body in frame — ankles to head.</li>
+              <li>Good lighting helps landmark detection.</li>
             </ul>
           </article>
         </aside>
