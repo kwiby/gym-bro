@@ -17,9 +17,23 @@ MODEL_PATH = 'pose_landmarker_lite.task'
 HOST = '127.0.0.1'
 PORT = 8000
 FRAME_BOUNDARY = b'--frame\r\nContent-Type: image/jpeg\r\n\r\n'
-ANALYSIS_WINDOW_MS = 5000
+CAMERA_INDICES = (0, 1, 2)
+CAMERA_WARMUP_FRAMES = 30
 ELEVENLABS_VOICE_ID = os.getenv('ELEVENLABS_VOICE_ID', '21m00Tcm4TlvDq8ikWAM')
 ELEVENLABS_MODEL_ID = os.getenv('ELEVENLABS_MODEL_ID', 'eleven_multilingual_v2')
+SUPPORTED_EXERCISES = {
+    'squat': 'Squat',
+    'pushup': 'Pushup',
+    'bicep_curl': 'Bicep curl',
+    'overhead_press': 'Overhead press',
+    'situp': 'Situp',
+    'lunge': 'Lunge',
+}
+DEFAULT_EXERCISE = 'squat'
+SUPPORTED_EXERCISE_OPTIONS = [
+    {'value': value, 'label': label}
+    for value, label in SUPPORTED_EXERCISES.items()
+]
 POLL_NAMES = {
     0: 'nose',
     11: 'left_shoulder',
@@ -37,6 +51,48 @@ POLL_NAMES = {
 }
 
 VISIBILITY_THRESHOLD = 0.35
+
+
+def exercise_label(exercise: str) -> str:
+    return SUPPORTED_EXERCISES.get(exercise, 'Exercise')
+
+
+def build_rep_prompt(exercise: str) -> str:
+    label = exercise_label(exercise)
+    return f"Do exactly one {label.lower()} rep. I will watch that one rep, then lock your feedback so it stays clear."
+
+
+def open_camera() -> tuple[Any | None, str | None]:
+    attempts: list[str] = []
+
+    for index in CAMERA_INDICES:
+        api_preferences = [cv2.CAP_DSHOW] if os.name == 'nt' else [0]
+        if os.name == 'nt':
+            api_preferences.append(0)
+
+        for api_preference in api_preferences:
+            cap = cv2.VideoCapture(index, api_preference) if api_preference else cv2.VideoCapture(index)
+            if not cap.isOpened():
+                cap.release()
+                attempts.append(f'camera {index} did not open')
+                continue
+
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+
+            for _ in range(CAMERA_WARMUP_FRAMES):
+                ok, frame = cap.read()
+                if ok and frame is not None and getattr(frame, 'size', 0) > 0:
+                    return cap, None
+                time.sleep(0.05)
+
+            cap.release()
+            attempts.append(f'camera {index} opened but never returned a frame')
+
+    if not attempts:
+        return None, 'No camera devices were attempted.'
+
+    return None, 'Could not start webcam. Tried: ' + '; '.join(attempts)
 
 INDEX_TO_NAME = {
     0: 'nose',
@@ -189,6 +245,17 @@ HTML_PAGE = """<!doctype html>
         border-radius: 16px;
         background: rgba(255, 255, 255, 0.04);
       }
+      .coach-box {
+        margin: 0 0 16px;
+        padding: 14px;
+        border-radius: 16px;
+        border: 1px solid rgba(143, 184, 255, 0.28);
+        background: rgba(143, 184, 255, 0.08);
+      }
+      .coach-box h2 {
+        margin: 0 0 6px;
+        font-size: 18px;
+      }
       .analysis.good {
         border: 1px solid rgba(92, 249, 170, 0.28);
       }
@@ -212,6 +279,26 @@ HTML_PAGE = """<!doctype html>
         margin: 0 0 16px;
         flex-wrap: wrap;
       }
+      .control-block {
+        margin: 0 0 16px;
+      }
+      .control-label {
+        display: block;
+        margin: 0 0 8px;
+        color: #a9b7c8;
+        font-size: 12px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+      .exercise-select {
+        width: 100%;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 14px;
+        padding: 12px 14px;
+        font: inherit;
+        color: #07111f;
+        background: #f4f7fb;
+      }
       .voice-button {
         border: 0;
         border-radius: 999px;
@@ -223,6 +310,22 @@ HTML_PAGE = """<!doctype html>
       }
       .voice-button[disabled] {
         opacity: 0.5;
+        cursor: not-allowed;
+      }
+      .coach-button {
+        width: 100%;
+        margin: 0 0 16px;
+        border: 0;
+        border-radius: 14px;
+        padding: 12px 14px;
+        font: inherit;
+        font-weight: 600;
+        color: #07111f;
+        background: linear-gradient(135deg, #5cf9aa, #8fb8ff);
+        cursor: pointer;
+      }
+      .coach-button[disabled] {
+        opacity: 0.55;
         cursor: not-allowed;
       }
       .analysis p {
@@ -269,16 +372,27 @@ HTML_PAGE = """<!doctype html>
       <aside class="panel sidebar">
         <div id="status" class="status"><span class="dot"></span><span>Starting camera...</span></div>
         <div class="stats">
+          <div class="stat"><span>Exercise</span><strong id="selected-exercise">Squat</strong></div>
+          <div class="stat"><span>Rep count</span><strong id="rep-count">0</strong></div>
           <div class="stat"><span>Frame size</span><strong id="frame-size">-</strong></div>
           <div class="stat"><span>Last update</span><strong id="timestamp">-</strong></div>
           <div class="stat"><span>Pose landmarks</span><strong id="landmark-count">0</strong></div>
+        </div>
+        <div class="control-block">
+          <label class="control-label" for="exercise-select">Exercise to score</label>
+          <select id="exercise-select" class="exercise-select"></select>
         </div>
         <div class="voice-row">
           <button id="voice-toggle" class="voice-button" type="button">Enable voice</button>
           <span id="voice-status" class="muted">Voice unavailable</span>
         </div>
+        <section id="coach-box" class="coach-box">
+          <h2 id="coach-title">Pick an exercise, then start a one-rep check.</h2>
+          <p id="coach-message">Do exactly one rep when the app is watching. It will lock the feedback after that rep so nothing gets overwritten.</p>
+        </section>
+        <button id="coach-button" class="coach-button" type="button">Start one-rep check</button>
         <section id="analysis" class="analysis neutral">
-          <div class="muted">Waiting for exercise analysis...</div>
+          <div class="muted">Your locked rep feedback will appear here after the rep finishes.</div>
         </section>
         <div id="joint-list" class="joint-list"></div>
       </aside>
@@ -289,6 +403,12 @@ HTML_PAGE = """<!doctype html>
       const frameSizeEl = document.getElementById('frame-size')
       const timestampEl = document.getElementById('timestamp')
       const landmarkCountEl = document.getElementById('landmark-count')
+      const selectedExerciseEl = document.getElementById('selected-exercise')
+      const repCountEl = document.getElementById('rep-count')
+      const exerciseSelectEl = document.getElementById('exercise-select')
+      const coachTitleEl = document.getElementById('coach-title')
+      const coachMessageEl = document.getElementById('coach-message')
+      const coachButtonEl = document.getElementById('coach-button')
       const analysisEl = document.getElementById('analysis')
       const jointListEl = document.getElementById('joint-list')
       const voiceToggleEl = document.getElementById('voice-toggle')
@@ -296,18 +416,30 @@ HTML_PAGE = """<!doctype html>
       const audioEl = new Audio()
       let voiceEnabled = false
       let lastVoiceVersion = 0
+      let latestVoiceVersion = 0
+      let optionSignature = ''
+      let queuedVoiceVersion = 0
+      let voiceStatusOverride = ''
+
+      function updateVoiceStatus(serverStatus) {
+        voiceStatusEl.textContent = voiceStatusOverride || serverStatus || 'Voice unavailable'
+      }
 
       voiceToggleEl.addEventListener('click', async () => {
         voiceEnabled = !voiceEnabled
         voiceToggleEl.textContent = voiceEnabled ? 'Disable voice' : 'Enable voice'
         if (voiceEnabled) {
+          voiceStatusOverride = ''
           try {
             audioEl.muted = false
-            await audioEl.play().catch(() => {})
-            audioEl.pause()
-            audioEl.currentTime = 0
+            if (latestVoiceVersion && latestVoiceVersion !== lastVoiceVersion) {
+              queuedVoiceVersion = 0
+              await playVoiceVersion(latestVoiceVersion)
+            }
           } catch (error) {
           }
+        } else {
+          audioEl.pause()
         }
       })
 
@@ -315,9 +447,50 @@ HTML_PAGE = """<!doctype html>
         return `<div class="joint"><strong>${name}</strong><br><span class="muted">x ${joint.x.toFixed(3)} · y ${joint.y.toFixed(3)} · z ${joint.z.toFixed(3)} · vis ${Math.round(joint.visibility * 100)}%</span></div>`
       }
 
+      async function playVoiceVersion(version) {
+        if (!version) {
+          return
+        }
+
+        audioEl.src = `/coach-audio.mp3?v=${version}`
+        try {
+          await audioEl.play()
+          lastVoiceVersion = version
+          voiceStatusOverride = ''
+        } catch (error) {
+          voiceStatusOverride = 'Voice ready - browser blocked autoplay, click Enable voice again.'
+          updateVoiceStatus('')
+        }
+      }
+
+      audioEl.addEventListener('ended', async () => {
+        if (!voiceEnabled || !queuedVoiceVersion || queuedVoiceVersion === lastVoiceVersion) {
+          return
+        }
+
+        const nextVersion = queuedVoiceVersion
+        queuedVoiceVersion = 0
+        await playVoiceVersion(nextVersion)
+      })
+
+      function syncExerciseOptions(payload) {
+        const options = payload.supportedExercises || []
+        const nextSignature = JSON.stringify(options)
+        if (nextSignature !== optionSignature) {
+          optionSignature = nextSignature
+          exerciseSelectEl.innerHTML = options
+            .map((option) => `<option value="${option.value}">${option.label}</option>`)
+            .join('')
+        }
+
+        if (payload.selectedExercise) {
+          exerciseSelectEl.value = payload.selectedExercise
+        }
+      }
+
       function renderAnalysis(analysis) {
         if (!analysis) {
-          return '<div class="muted">No exercise analysis yet.</div>'
+          return '<div class="muted">No locked rep feedback yet.</div>'
         }
 
         const windowLabel = analysis.windowStartedAt && analysis.windowEndedAt
@@ -350,18 +523,25 @@ HTML_PAGE = """<!doctype html>
           frameSizeEl.textContent = payload.frameWidth && payload.frameHeight ? `${payload.frameWidth} x ${payload.frameHeight}` : '-'
           timestampEl.textContent = payload.updatedAt ? new Date(payload.updatedAt).toLocaleTimeString() : '-'
           landmarkCountEl.textContent = String(payload.landmarkCount || 0)
+          selectedExerciseEl.textContent = payload.selectedExerciseLabel || 'Exercise'
+          repCountEl.textContent = String(payload.repCount || 0)
+          coachTitleEl.textContent = payload.coachTitle || 'One-rep coaching'
+          coachMessageEl.textContent = payload.coachMessage || ''
+          coachButtonEl.textContent = payload.coachButtonLabel || 'Start one-rep check'
+          coachButtonEl.disabled = Boolean(payload.coachButtonDisabled)
+          syncExerciseOptions(payload)
           analysisEl.className = `analysis ${payload.analysis?.feedback?.tone || 'neutral'}`
           analysisEl.innerHTML = renderAnalysis(payload.analysis)
           voiceToggleEl.disabled = !payload.voice?.available
-          voiceStatusEl.textContent = payload.voice?.status || 'Voice unavailable'
+          latestVoiceVersion = payload.voice?.version || 0
+          updateVoiceStatus(payload.voice?.status)
 
           if (voiceEnabled && payload.voice?.available && payload.voice?.version && payload.voice.version !== lastVoiceVersion) {
-            lastVoiceVersion = payload.voice.version
-            audioEl.src = `/coach-audio.mp3?v=${payload.voice.version}`
-            try {
-              await audioEl.play()
-            } catch (error) {
-              voiceStatusEl.textContent = 'Voice ready - browser blocked autoplay, click Enable voice again.'
+            if (!audioEl.paused && !audioEl.ended) {
+              queuedVoiceVersion = payload.voice.version
+            } else {
+              queuedVoiceVersion = 0
+              await playVoiceVersion(payload.voice.version)
             }
           }
 
@@ -374,6 +554,28 @@ HTML_PAGE = """<!doctype html>
           statusEl.innerHTML = '<span class="dot"></span><span>Failed to reach Python server</span>'
         }
       }
+
+      exerciseSelectEl.addEventListener('change', async () => {
+        try {
+          await fetch('/exercise', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ exercise: exerciseSelectEl.value }),
+          })
+        } catch (error) {
+        }
+      })
+
+      coachButtonEl.addEventListener('click', async () => {
+        try {
+          await fetch('/rep-check/start', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ exercise: exerciseSelectEl.value }),
+          })
+        } catch (error) {
+        }
+      })
 
       poll()
       setInterval(poll, 250)
@@ -460,12 +662,14 @@ def stage_from_angle(angle: float, bottom_threshold: float, top_threshold: float
     return 'mid'
 
 
-def no_pose_analysis() -> dict[str, Any]:
+def no_pose_analysis(selected_exercise: str = DEFAULT_EXERCISE) -> dict[str, Any]:
+    label = exercise_label(selected_exercise)
     return {
-        'exercise': 'unknown',
-        'exerciseLabel': 'No exercise',
-        'status': 'Waiting for a clear full-body pose',
+        'exercise': selected_exercise,
+        'exerciseLabel': label,
+        'status': f'Waiting for a clear {label.lower()} pose',
         'metrics': [],
+        'stage': 'unknown',
         'feedback': {
             'tone': 'neutral',
             'title': 'Need a clearer view',
@@ -477,12 +681,14 @@ def no_pose_analysis() -> dict[str, Any]:
     }
 
 
-def partial_pose_analysis(label: str) -> dict[str, Any]:
+def partial_pose_analysis(selected_exercise: str) -> dict[str, Any]:
+    label = exercise_label(selected_exercise)
     return {
-        'exercise': 'unknown',
+        'exercise': selected_exercise,
         'exerciseLabel': label,
         'status': 'Pose found, but not enough visible joints for scoring',
         'metrics': [],
+        'stage': 'unknown',
         'feedback': {
             'tone': 'neutral',
             'title': 'Need a clearer angle',
@@ -530,26 +736,24 @@ def average_metric_sets(analyses: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return averaged
 
 
-def aggregate_analysis_window(samples: list[dict[str, Any]], window_started_at: int, window_ended_at: int) -> dict[str, Any]:
+def aggregate_analysis_window(
+    samples: list[dict[str, Any]],
+    selected_exercise: str,
+    window_started_at: int,
+    window_ended_at: int,
+) -> dict[str, Any]:
     if not samples:
-        analysis = no_pose_analysis()
+        analysis = no_pose_analysis(selected_exercise)
         analysis['status'] = 'No form data captured in the last 5 seconds'
         analysis['feedback']['title'] = 'Waiting for movement in frame'
         analysis['windowStartedAt'] = window_started_at
         analysis['windowEndedAt'] = window_ended_at
         return analysis
 
-    exercise_counts = Counter(
-        sample['analysis'].get('exercise', 'unknown')
-        for sample in samples
-        if sample['analysis'].get('exercise', 'unknown') != 'unknown'
-    )
-    dominant_exercise = exercise_counts.most_common(1)[0][0] if exercise_counts else 'unknown'
-
     selected_analyses = [
         sample['analysis']
         for sample in samples
-        if sample['analysis'].get('exercise', 'unknown') == dominant_exercise
+        if sample['analysis'].get('exercise') == selected_exercise
     ]
     if not selected_analyses:
         selected_analyses = [sample['analysis'] for sample in samples]
@@ -578,10 +782,7 @@ def aggregate_analysis_window(samples: list[dict[str, Any]], window_started_at: 
         details = ['Keep moving for another 5 seconds so the app can gather more form data.']
 
     exercise_label = base.get('exerciseLabel', 'Exercise')
-    if dominant_exercise == 'unknown':
-        status = 'Summary from the last 5 seconds'
-    else:
-        status = f'{exercise_label} summary from the last 5 seconds'
+    status = f'{exercise_label} summary from the last 5 seconds'
 
     base['status'] = status
     base['metrics'] = metric_summary
@@ -597,15 +798,11 @@ def aggregate_analysis_window(samples: list[dict[str, Any]], window_started_at: 
 
 
 def build_spoken_feedback(analysis: dict[str, Any]) -> str | None:
-    exercise = analysis.get('exercise', 'unknown')
     feedback = analysis.get('feedback', {})
     tone = feedback.get('tone', 'neutral')
     details = feedback.get('details', [])
     title = feedback.get('title', '')
     label = analysis.get('exerciseLabel', 'exercise')
-
-    if exercise == 'unknown':
-        return None
 
     if tone in {'warn', 'bad'} and details:
         return f"{label} check. {title}. {details[0]}"
@@ -616,6 +813,167 @@ def build_spoken_feedback(analysis: dict[str, Any]) -> str | None:
     return None
 
 
+def aggregate_rep_samples(samples: list[dict[str, Any]], selected_exercise: str) -> dict[str, Any]:
+    if not samples:
+        analysis = no_pose_analysis(selected_exercise)
+        analysis['status'] = 'No scored rep was captured'
+        analysis['feedback'] = {
+            'tone': 'neutral',
+            'title': 'Rep not captured',
+            'details': [
+                f'Start the {exercise_label(selected_exercise).lower()} from a clear position and complete one full rep.',
+            ],
+        }
+        return analysis
+
+    base = dict(samples[-1])
+    metric_summary = average_metric_sets(samples)
+    detail_counts = Counter()
+    title_counts = Counter()
+    stage_counts = Counter()
+    tone = 'neutral'
+
+    for analysis in samples:
+        feedback = analysis.get('feedback', {})
+        current_tone = feedback.get('tone', 'neutral')
+        if tone_rank(current_tone) > tone_rank(tone):
+            tone = current_tone
+        if feedback.get('title'):
+            title_counts[feedback['title']] += 1
+        for detail in feedback.get('details', []):
+            detail_counts[detail] += 1
+        if analysis.get('stage'):
+            stage_counts[analysis['stage']] += 1
+
+    details = [detail for detail, _ in detail_counts.most_common(3)]
+    if not details:
+        details = ['Rep captured. Read the notes, then start another one-rep check when you are ready.']
+
+    base['status'] = f"{base.get('exerciseLabel', exercise_label(selected_exercise))} rep captured and locked"
+    base['metrics'] = metric_summary
+    base['stage'] = stage_counts.most_common(1)[0][0] if stage_counts else base.get('stage', 'unknown')
+    base['feedback'] = {
+        'tone': tone,
+        'title': title_counts.most_common(1)[0][0] if title_counts else 'Rep feedback locked',
+        'details': details,
+    }
+    return base
+
+
+class WorkoutTracker:
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.selected_exercise = DEFAULT_EXERCISE
+        self.rep_count = 0
+        self.coach_state = 'idle'
+        self.last_stage = 'unknown'
+        self.seen_bottom = False
+        self.completed_analysis: dict[str, Any] | None = None
+        self.current_rep_samples: list[dict[str, Any]] = []
+
+    def snapshot(self) -> dict[str, Any]:
+        with self.lock:
+            exercise = self.selected_exercise
+            coach_title = 'Pick an exercise, then start a one-rep check.'
+            coach_message = build_rep_prompt(exercise)
+            coach_button_label = 'Start one-rep check'
+            coach_button_disabled = False
+
+            if self.coach_state == 'waiting':
+                coach_title = 'Ready. Do one clean rep now.'
+                coach_message = f"I am waiting for one full {exercise_label(exercise).lower()} rep. I will lock the feedback as soon as you finish it."
+                coach_button_label = 'Watching your rep...'
+                coach_button_disabled = True
+            elif self.coach_state == 'collecting':
+                coach_title = 'Rep in progress.'
+                coach_message = 'Finish this rep normally. Feedback will stay locked after this rep completes.'
+                coach_button_label = 'Watching your rep...'
+                coach_button_disabled = True
+            elif self.coach_state == 'complete':
+                coach_title = 'Feedback locked for your last rep.'
+                coach_message = 'Read the notes below. When you want another score, press the button to analyze one new rep.'
+                coach_button_label = 'Analyze next rep'
+
+            return {
+                'selectedExercise': exercise,
+                'selectedExerciseLabel': exercise_label(exercise),
+                'supportedExercises': SUPPORTED_EXERCISE_OPTIONS,
+                'repCount': self.rep_count,
+                'coachState': self.coach_state,
+                'coachTitle': coach_title,
+                'coachMessage': coach_message,
+                'coachButtonLabel': coach_button_label,
+                'coachButtonDisabled': coach_button_disabled,
+                'analysisLocked': self.coach_state == 'complete',
+            }
+
+    def current_exercise(self) -> str:
+        with self.lock:
+            return self.selected_exercise
+
+    def select_exercise(self, exercise: str) -> bool:
+        if exercise not in SUPPORTED_EXERCISES:
+            return False
+
+        with self.lock:
+            self.selected_exercise = exercise
+            self.rep_count = 0
+            self.coach_state = 'idle'
+            self.last_stage = 'unknown'
+            self.seen_bottom = False
+            self.completed_analysis = None
+            self.current_rep_samples = []
+        return True
+
+    def start_rep_check(self) -> str:
+        with self.lock:
+            self.coach_state = 'waiting'
+            self.last_stage = 'unknown'
+            self.seen_bottom = False
+            self.completed_analysis = None
+            self.current_rep_samples = []
+            return build_rep_prompt(self.selected_exercise)
+
+    def displayed_analysis(self) -> dict[str, Any] | None:
+        with self.lock:
+            if self.coach_state == 'complete' and self.completed_analysis is not None:
+                return dict(self.completed_analysis)
+            return None
+
+    def update(self, analysis: dict[str, Any]) -> tuple[dict[str, Any] | None, str | None]:
+        with self.lock:
+            if self.coach_state not in {'waiting', 'collecting'}:
+                return self.completed_analysis, None
+
+            stage = analysis.get('stage', 'unknown')
+            if stage == 'unknown':
+                return self.completed_analysis, None
+
+            if self.coach_state == 'waiting':
+                self.coach_state = 'collecting'
+
+            self.current_rep_samples.append(analysis)
+
+            if stage == 'bottom':
+                self.seen_bottom = True
+
+            locked_analysis: dict[str, Any] | None = None
+            voice_text: str | None = None
+            if stage == 'top' and self.last_stage != 'top' and self.seen_bottom:
+                self.rep_count += 1
+                self.seen_bottom = False
+                self.coach_state = 'complete'
+                locked_analysis = aggregate_rep_samples(self.current_rep_samples, self.selected_exercise)
+                self.completed_analysis = locked_analysis
+                self.current_rep_samples = []
+                voice_text = build_spoken_feedback(locked_analysis)
+                if voice_text is None:
+                    voice_text = f"{exercise_label(self.selected_exercise)} rep captured. Feedback is now locked on screen."
+
+            self.last_stage = stage
+            return locked_analysis, voice_text
+
+
 def analyze_squat(pose: list[Any]) -> dict[str, Any]:
     side = get_primary_side(pose, (11, 12, 23, 24, 25, 26, 27, 28))
     shoulder = pose[11] if side == 'left' else pose[12]
@@ -624,7 +982,7 @@ def analyze_squat(pose: list[Any]) -> dict[str, Any]:
     ankle = pose[27] if side == 'left' else pose[28]
 
     if not all(landmark_visible(item) for item in (shoulder, hip, knee, ankle)):
-        return partial_pose_analysis('Squat')
+        return partial_pose_analysis('squat')
 
     knee_angle = calculate_angle(hip, knee, ankle)
     hip_angle = calculate_angle(shoulder, hip, knee)
@@ -682,7 +1040,7 @@ def analyze_pushup(pose: list[Any]) -> dict[str, Any]:
     ankle = pose[27] if side == 'left' else pose[28]
 
     if not all(landmark_visible(item) for item in (shoulder, elbow, wrist, hip, ankle)):
-        return partial_pose_analysis('Pushup')
+        return partial_pose_analysis('pushup')
 
     elbow_angle = calculate_angle(shoulder, elbow, wrist)
     body_line = calculate_angle(shoulder, hip, ankle)
@@ -732,7 +1090,7 @@ def analyze_bicep_curl(pose: list[Any]) -> dict[str, Any]:
     hip = pose[23] if side == 'left' else pose[24]
 
     if not all(landmark_visible(item) for item in (shoulder, elbow, wrist, hip)):
-        return partial_pose_analysis('Bicep curl')
+        return partial_pose_analysis('bicep_curl')
 
     elbow_angle = calculate_angle(shoulder, elbow, wrist)
     upper_arm_drift = calculate_angle(hip, shoulder, elbow)
@@ -774,56 +1132,176 @@ def analyze_bicep_curl(pose: list[Any]) -> dict[str, Any]:
     }
 
 
-def analyze_pose(result: Any) -> dict[str, Any]:
-    pose = get_pose_landmarks(result)
-    if pose is None:
-        return no_pose_analysis()
+def analyze_overhead_press(pose: list[Any]) -> dict[str, Any]:
+    side = get_primary_side(pose, (11, 12, 13, 14, 15, 16, 23, 24))
+    shoulder = pose[11] if side == 'left' else pose[12]
+    elbow = pose[13] if side == 'left' else pose[14]
+    wrist = pose[15] if side == 'left' else pose[16]
+    hip = pose[23] if side == 'left' else pose[24]
 
-    left_shoulder = pose[11]
-    right_shoulder = pose[12]
-    left_hip = pose[23]
-    right_hip = pose[24]
-    left_ankle = pose[27]
-    right_ankle = pose[28]
-    left_elbow = pose[13]
-    right_elbow = pose[14]
-    left_knee = pose[25]
-    right_knee = pose[26]
+    if not all(landmark_visible(item) for item in (shoulder, elbow, wrist, hip)):
+        return partial_pose_analysis('overhead_press')
 
-    torso_reference_side = 'left' if (left_shoulder.visibility or 0) >= (right_shoulder.visibility or 0) else 'right'
-    shoulder = left_shoulder if torso_reference_side == 'left' else right_shoulder
-    hip = left_hip if torso_reference_side == 'left' else right_hip
-    ankle = left_ankle if torso_reference_side == 'left' else right_ankle
-    torso_angle = angle_from_vertical(hip, shoulder) if all(landmark_visible(item, 0.2) for item in (shoulder, hip)) else 0.0
-    min_elbow_angle = min(calculate_angle(left_shoulder, left_elbow, pose[15]), calculate_angle(right_shoulder, right_elbow, pose[16]))
-    min_knee_angle = min(calculate_angle(left_hip, left_knee, left_ankle), calculate_angle(right_hip, right_knee, right_ankle))
-    body_line = calculate_angle(shoulder, hip, ankle) if all(landmark_visible(item, 0.2) for item in (shoulder, hip, ankle)) else 0.0
+    elbow_angle = calculate_angle(shoulder, elbow, wrist)
+    arm_stack = angle_from_vertical(shoulder, wrist)
+    stage = 'top' if wrist.y < shoulder.y and elbow_angle >= 145.0 else 'bottom' if wrist.y > shoulder.y else 'mid'
+    tone = 'good'
+    title = 'Press path looks solid'
+    details: list[str] = []
 
-    if torso_angle > 55.0 and body_line > 140.0:
-        return analyze_pushup(pose)
-    if min_knee_angle < 150.0:
-        return analyze_squat(pose)
-    if min_elbow_angle < 135.0:
-        return analyze_bicep_curl(pose)
+    if stage == 'top' and elbow_angle < 155.0:
+        tone = 'warn'
+        title = 'Finish taller overhead'
+        details.append('Reach higher at the top so the press fully locks out.')
+
+    if arm_stack > 26.0:
+        tone = 'bad' if tone == 'warn' else 'warn'
+        title = 'Stack the arm more vertically'
+        details.append('Keep your wrist closer over the shoulder instead of drifting forward.')
+
+    if not details:
+        if stage == 'top':
+            details.append('Nice lockout. Lower with control and press straight back up.')
+        elif stage == 'mid':
+            details.append('Smooth press. Keep the wrist stacked over the shoulder.')
+        else:
+            tone = 'neutral'
+            title = 'Ready for the next press'
+            details.append('Start at shoulder level, brace, and drive the weight overhead.')
 
     return {
-        'exercise': 'unknown',
-        'exerciseLabel': 'No exercise locked',
-        'status': 'Standing pose detected',
+        'exercise': 'overhead_press',
+        'exerciseLabel': 'Overhead press',
+        'stage': stage,
+        'status': f'Overhead press detected on {side} side',
         'metrics': [
-            {'label': 'Torso angle', 'value': torso_angle, 'target': 'side view helps'},
-            {'label': 'Min knee angle', 'value': min_knee_angle, 'target': 'drops in squats'},
-            {'label': 'Min elbow angle', 'value': min_elbow_angle, 'target': 'drops in curls/pushups'},
+            {'label': 'Elbow angle', 'value': elbow_angle, 'target': 'near 160 deg at top'},
+            {'label': 'Arm stack', 'value': arm_stack, 'target': 'under 25 deg'},
         ],
-        'feedback': {
-            'tone': 'neutral',
-            'title': 'Move into a supported exercise shape',
-            'details': [
-                'This build recognizes squats, pushups, and bicep curls.',
-                'Turn slightly side-on so the joint angles are easier to score.',
-            ],
-        },
+        'feedback': {'tone': tone, 'title': title, 'details': details},
     }
+
+
+def analyze_situp(pose: list[Any]) -> dict[str, Any]:
+    side = get_primary_side(pose, (11, 12, 23, 24, 25, 26, 27, 28))
+    shoulder = pose[11] if side == 'left' else pose[12]
+    hip = pose[23] if side == 'left' else pose[24]
+    knee = pose[25] if side == 'left' else pose[26]
+    ankle = pose[27] if side == 'left' else pose[28]
+
+    if not all(landmark_visible(item) for item in (shoulder, hip, knee, ankle)):
+        return partial_pose_analysis('situp')
+
+    torso_angle = angle_from_vertical(hip, shoulder)
+    hip_angle = calculate_angle(shoulder, hip, knee)
+    knee_angle = calculate_angle(hip, knee, ankle)
+    stage = 'top' if torso_angle < 28.0 else 'bottom' if torso_angle > 55.0 else 'mid'
+    tone = 'good'
+    title = 'Situp rhythm looks strong'
+    details: list[str] = []
+
+    if stage != 'top' and torso_angle > 62.0:
+        tone = 'warn'
+        title = 'Come up a little higher'
+        details.append('Curl higher at the top so your torso gets more upright.')
+
+    if knee_angle > 160.0:
+        tone = 'bad' if tone == 'warn' else 'warn'
+        title = 'Bend the knees more'
+        details.append('Keep your knees bent so the situp position stays more stable.')
+
+    if not details:
+        if stage == 'top':
+            details.append('Nice crunch. Lower under control and keep tension through your core.')
+        elif stage == 'mid':
+            details.append('Good tempo. Keep the movement driven by your abs, not momentum.')
+        else:
+            tone = 'neutral'
+            title = 'Ready for the next situp'
+            details.append('Brace your core, curl up smoothly, and lower without flopping back.')
+
+    return {
+        'exercise': 'situp',
+        'exerciseLabel': 'Situp',
+        'stage': stage,
+        'status': f'Situp detected on {side} side',
+        'metrics': [
+            {'label': 'Torso angle', 'value': torso_angle, 'target': 'under 30 deg at top'},
+            {'label': 'Hip angle', 'value': hip_angle, 'target': 'stay controlled'},
+        ],
+        'feedback': {'tone': tone, 'title': title, 'details': details},
+    }
+
+
+def analyze_lunge(pose: list[Any]) -> dict[str, Any]:
+    side = get_primary_side(pose, (11, 12, 23, 24, 25, 26, 27, 28))
+    shoulder = pose[11] if side == 'left' else pose[12]
+    hip = pose[23] if side == 'left' else pose[24]
+    knee = pose[25] if side == 'left' else pose[26]
+    ankle = pose[27] if side == 'left' else pose[28]
+
+    if not all(landmark_visible(item) for item in (shoulder, hip, knee, ankle)):
+        return partial_pose_analysis('lunge')
+
+    knee_angle = calculate_angle(hip, knee, ankle)
+    torso_lean = angle_from_vertical(hip, shoulder)
+    hip_angle = calculate_angle(shoulder, hip, knee)
+    stage = stage_from_angle(knee_angle, 112.0, 158.0)
+    tone = 'good'
+    title = 'Lunge position looks strong'
+    details: list[str] = []
+
+    if stage != 'top' and knee_angle > 122.0:
+        tone = 'warn'
+        title = 'Drop deeper into the lunge'
+        details.append('Lower a bit more so the front knee bends closer to ninety degrees.')
+
+    if torso_lean > 24.0:
+        tone = 'bad' if tone == 'warn' else 'warn'
+        title = 'Stay more upright'
+        details.append('Keep your chest taller instead of leaning forward into the rep.')
+
+    if not details:
+        if stage == 'top':
+            tone = 'neutral'
+            title = 'Ready for the next lunge'
+            details.append('Step down with control, then drive back up tall through the front leg.')
+        elif stage == 'bottom':
+            details.append('Nice depth. Push through the floor and stand back up smoothly.')
+        else:
+            details.append('Good control. Keep the front knee tracking cleanly over the foot.')
+
+    return {
+        'exercise': 'lunge',
+        'exerciseLabel': 'Lunge',
+        'stage': stage,
+        'status': f'Lunge detected on {side} side',
+        'metrics': [
+            {'label': 'Knee angle', 'value': knee_angle, 'target': '90-110 deg bottom'},
+            {'label': 'Torso lean', 'value': torso_lean, 'target': 'under 25 deg'},
+            {'label': 'Hip angle', 'value': hip_angle, 'target': 'stay controlled'},
+        ],
+        'feedback': {'tone': tone, 'title': title, 'details': details},
+    }
+
+
+def analyze_pose(result: Any, selected_exercise: str) -> dict[str, Any]:
+    pose = get_pose_landmarks(result)
+    if pose is None:
+        return no_pose_analysis(selected_exercise)
+
+    analyzers = {
+        'squat': analyze_squat,
+        'pushup': analyze_pushup,
+        'bicep_curl': analyze_bicep_curl,
+        'overhead_press': analyze_overhead_press,
+        'situp': analyze_situp,
+        'lunge': analyze_lunge,
+    }
+    analyzer = analyzers.get(selected_exercise)
+    if analyzer is None:
+        return no_pose_analysis(DEFAULT_EXERCISE)
+    return analyzer(pose)
 
 
 def build_joint_payload(result: Any) -> dict[str, Any]:
@@ -855,7 +1333,11 @@ class PoseRuntime:
             'frameHeight': 0,
             'landmarkCount': 0,
             'joints': {},
-            'analysis': no_pose_analysis(),
+            'analysis': None,
+            'selectedExercise': DEFAULT_EXERCISE,
+            'selectedExerciseLabel': exercise_label(DEFAULT_EXERCISE),
+            'supportedExercises': SUPPORTED_EXERCISE_OPTIONS,
+            'repCount': 0,
             'voice': {
                 'available': False,
                 'status': 'Set ELEVENLABS_API_KEY to enable voice coaching.',
@@ -877,6 +1359,10 @@ class PoseRuntime:
             self.latest_jpeg = jpeg
             self.latest_payload = payload
 
+    def update_payload(self, payload: dict[str, Any]) -> None:
+        with self.lock:
+            self.latest_payload = payload
+
     def set_error(self, message: str) -> None:
         with self.lock:
             self.latest_payload = {
@@ -887,7 +1373,11 @@ class PoseRuntime:
                 'frameHeight': 0,
                 'landmarkCount': 0,
                 'joints': {},
-                'analysis': no_pose_analysis(),
+                'analysis': no_pose_analysis(self.latest_payload.get('selectedExercise', DEFAULT_EXERCISE)),
+                'selectedExercise': self.latest_payload.get('selectedExercise', DEFAULT_EXERCISE),
+                'selectedExerciseLabel': self.latest_payload.get('selectedExerciseLabel', exercise_label(DEFAULT_EXERCISE)),
+                'supportedExercises': self.latest_payload.get('supportedExercises', SUPPORTED_EXERCISE_OPTIONS),
+                'repCount': self.latest_payload.get('repCount', 0),
                 'voice': self.latest_payload.get('voice', {
                     'available': False,
                     'status': 'Set ELEVENLABS_API_KEY to enable voice coaching.',
@@ -956,7 +1446,9 @@ class VoiceManager:
 
 
 runtime = PoseRuntime()
+workout_tracker = WorkoutTracker()
 voice_manager = VoiceManager()
+runtime.latest_payload.update(workout_tracker.snapshot())
 runtime.latest_payload['voice'] = voice_manager.snapshot()
 
 
@@ -973,15 +1465,12 @@ def capture_loop() -> None:
 
     try:
         with mp.tasks.vision.PoseLandmarker.create_from_options(options) as landmarker:
-            cap = cv2.VideoCapture(0)
-            if not cap.isOpened():
-                runtime.set_error('Could not open webcam from Python.')
+            cap, camera_error = open_camera()
+            if cap is None:
+                runtime.set_error(camera_error or 'Could not open webcam from Python.')
                 return
 
             try:
-                analysis_samples: list[dict[str, Any]] = []
-                next_publish_at = int(time.time() * 1000) + ANALYSIS_WINDOW_MS
-
                 while runtime.running:
                     ok, frame = cap.read()
                     if not ok:
@@ -992,6 +1481,7 @@ def capture_loop() -> None:
                     frame = cv2.flip(frame, 1)
                     rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                     mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
+                    selected_exercise = workout_tracker.current_exercise()
                     timestamp_ms = int(time.time() * 1000)
                     result = landmarker.detect_for_video(mp_image, timestamp_ms)
                     frame = draw_landmarks_on_frame(frame, result)
@@ -1001,31 +1491,14 @@ def capture_loop() -> None:
                         continue
 
                     joints = build_joint_payload(result)
-                    analysis_samples.append({
-                        'timestamp': timestamp_ms,
-                        'analysis': analyze_pose(result),
-                    })
+                    analysis = analyze_pose(result, selected_exercise)
+                    locked_analysis, voice_text = workout_tracker.update(analysis)
+                    if voice_text:
+                        voice_manager.request(voice_text)
 
-                    published_analysis = runtime.snapshot().get('analysis', no_pose_analysis())
-                    if timestamp_ms >= next_publish_at:
-                        window_started_at = next_publish_at - ANALYSIS_WINDOW_MS
-                        window_ended_at = next_publish_at
-                        window_samples = [
-                            sample
-                            for sample in analysis_samples
-                            if window_started_at <= sample['timestamp'] < window_ended_at
-                        ]
-                        published_analysis = aggregate_analysis_window(
-                            window_samples,
-                            window_started_at,
-                            window_ended_at,
-                        )
-                        analysis_samples = [
-                            sample for sample in analysis_samples if sample['timestamp'] >= window_ended_at
-                        ]
-                        next_publish_at += ANALYSIS_WINDOW_MS
-                        voice_manager.request(build_spoken_feedback(published_analysis))
+                    published_analysis = locked_analysis or workout_tracker.displayed_analysis()
 
+                    tracker_snapshot = workout_tracker.snapshot()
                     payload = {
                         'status': 'Camera live' if joints else 'Searching for pose...',
                         'error': '',
@@ -1035,6 +1508,7 @@ def capture_loop() -> None:
                         'landmarkCount': len(result.pose_landmarks[0]) if result and result.pose_landmarks else 0,
                         'joints': joints,
                         'analysis': published_analysis,
+                        **tracker_snapshot,
                         'voice': voice_manager.snapshot(),
                     }
                     runtime.update(jpeg.tobytes(), payload)
@@ -1060,6 +1534,15 @@ class PoseRequestHandler(BaseHTTPRequestHandler):
             return
         self.send_error(HTTPStatus.NOT_FOUND)
 
+    def do_POST(self) -> None:
+        if self.path == '/exercise':
+            self._update_exercise()
+            return
+        if self.path == '/rep-check/start':
+            self._start_rep_check()
+            return
+        self.send_error(HTTPStatus.NOT_FOUND)
+
     def log_message(self, format: str, *args: Any) -> None:
         return
 
@@ -1079,6 +1562,52 @@ class PoseRequestHandler(BaseHTTPRequestHandler):
         self.send_header('Content-Length', str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def _update_exercise(self) -> None:
+        content_length = int(self.headers.get('Content-Length', '0'))
+        raw_body = self.rfile.read(content_length) if content_length else b'{}'
+
+        try:
+            payload = json.loads(raw_body.decode('utf-8'))
+        except json.JSONDecodeError:
+            self.send_error(HTTPStatus.BAD_REQUEST, 'Invalid JSON body')
+            return
+
+        exercise = payload.get('exercise')
+        if not isinstance(exercise, str) or not workout_tracker.select_exercise(exercise):
+            self.send_error(HTTPStatus.BAD_REQUEST, 'Unsupported exercise')
+            return
+
+        tracker_snapshot = workout_tracker.snapshot()
+        latest = runtime.snapshot()
+        latest.update(tracker_snapshot)
+        latest['analysis'] = None
+        runtime.update_payload(latest)
+        self._write_json({'ok': True, **tracker_snapshot})
+
+    def _start_rep_check(self) -> None:
+        content_length = int(self.headers.get('Content-Length', '0'))
+        raw_body = self.rfile.read(content_length) if content_length else b'{}'
+
+        try:
+            payload = json.loads(raw_body.decode('utf-8'))
+        except json.JSONDecodeError:
+            self.send_error(HTTPStatus.BAD_REQUEST, 'Invalid JSON body')
+            return
+
+        exercise = payload.get('exercise')
+        if isinstance(exercise, str) and exercise in SUPPORTED_EXERCISES:
+            workout_tracker.select_exercise(exercise)
+
+        prompt = workout_tracker.start_rep_check()
+        voice_manager.request(prompt)
+
+        tracker_snapshot = workout_tracker.snapshot()
+        latest = runtime.snapshot()
+        latest.update(tracker_snapshot)
+        latest['analysis'] = None
+        runtime.update_payload(latest)
+        self._write_json({'ok': True, **tracker_snapshot})
 
     def _write_audio(self) -> None:
         body = voice_manager.audio()
