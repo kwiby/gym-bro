@@ -5,6 +5,7 @@
 # Gym Bro - A [ConHacks 2026](https://conhacks.io/) Hackathon Project
 
 While working out, have you ever felt that your form had less structural integrity than a piece of wet toast? Well, worry no more for we have a solution, Gym Bro!
+![Screenshot 1](https://github.com/AndrewLu-1/Gym_bro/blob/main/Screenshot%201.png)
 
 ## What it does
 Gym Bro is a workout coaching website that uses your webcam to analyze your workout form in real time.
@@ -30,8 +31,12 @@ web_pose_server.py
 
 ## How to use it
 
-### One-rep coaching
+<table style="border: none; border-collapse: collapse;">
+  <tr>
+    <!-- LEFT COLUMN -->
+    <td style="border: none; vertical-align: top; padding-right: 20px;">
 
+### One-rep coaching
 1. Select an exercise from the dropdown.
 2. Click `Enable voice` if you want spoken coaching.
 3. Click `Start one-rep check`.
@@ -39,13 +44,21 @@ web_pose_server.py
 5. The app locks the feedback for that rep on screen until you start another check.
 
 ### Combo training
-
 1. Select an exercise.
 2. Choose a session length: `1 minute` or `2 minutes`.
 3. Click `Start combo session`.
 4. String together good reps.
 5. A good rep adds to the combo if the next good rep lands within 5 seconds.
-6. The UI shows live combo, session best, time remaining, and separate high scores for each session length. allow desktop apps.
+6. The UI shows live combo, session best, time remaining, and separate high scores for each session length.
+
+    </td>
+
+    <!-- RIGHT COLUMN -->
+    <td style="border: none; vertical-align: top;">
+      <img src="https://github.com/AndrewLu-1/Gym_bro/blob/main/Screenshot%202.png" width="250">
+    </td>
+  </tr>
+</table>
 
 ## Tech stack
 
@@ -62,3 +75,6 @@ web_pose_server.py         Main local pose server with exercise coaching.
 pose_landmarker_lite.task  MediaPipe pose model used by the Python flow.
 mediapipe_handler.py       Skeleton standalone Python camera script.
 ```
+
+
+![Screenshot 3](https://github.com/AndrewLu-1/Gym_bro/blob/main/Screenshot%203.png)
