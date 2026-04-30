@@ -49,8 +49,7 @@ web_pose_server.py
 - **MediaPipe Tasks** for pose landmark detection
 - **Standard library HTTP server** for the local web app
 - **ElevenLabs Python SDK** for optional spoken coaching
-- **Vanilla browser JS/CSS inside the served HTML** for the current UI
-- **React 19 + TypeScript + Vite** for the older browser-only tracker still in the repo
+- **Vanilla browser JS/CSS inside the served HTML** for the UI
 
 ## Project structure
 
