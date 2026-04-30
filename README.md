@@ -7,10 +7,16 @@
 While working out, have you ever felt that your form had less structural integrity than a piece of wet toast? Well, worry no more for we have a solution, Gym Bro!
 ![Screenshot 1](https://github.com/AndrewLu-1/Gym_bro/blob/main/Screenshot%201.png)
 
-## What it does
+## What It Does
 Gym Bro is a workout coaching website that uses your webcam to analyze your workout form in real time.
 
-## How we built it
+## How It Was Built
+
+<table style="border: none; border-collapse: collapse;">
+  <tr>
+    <!-- LEFT COLUMN -->
+    <td style="border: none; vertical-align: top;">
+
 **Tech Stack:**
 - Python.
 - OpenCV for webcam capture.
@@ -26,24 +32,30 @@ Gym Bro is a workout coaching website that uses your webcam to analyze your work
 - A JSON endpoint exposes exercise state, rep counts, combo state, and feedback.
 - The browser renders the live UI and handles optional voice playback.
 
-**Main File:**
-web_pose_server.py
+    </td>
 
-## How to use it
+    <!-- RIGHT COLUMN -->
+    <td style="border: none; vertical-align: top;">
+      <img src="https://github.com/AndrewLu-1/Gym_bro/blob/main/Screenshot%203.png" width="250">
+    </td>
+  </tr>
+</table>
+
+## How To Use It
 
 <table style="border: none; border-collapse: collapse;">
   <tr>
     <!-- LEFT COLUMN -->
-    <td style="border: none; vertical-align: top; padding-right: 20px;">
+    <td style="border: none; vertical-align: top;">
 
-### One-rep coaching
+### One-Rep Check
 1. Select an exercise from the dropdown.
 2. Click `Enable voice` if you want spoken coaching.
 3. Click `Start one-rep check`.
 4. Perform exactly one full rep.
 5. The app locks the feedback for that rep on screen until you start another check.
 
-### Combo training
+### Combo Session
 1. Select an exercise.
 2. Choose a session length: `1 minute` or `2 minutes`.
 3. Click `Start combo session`.
@@ -60,7 +72,7 @@ web_pose_server.py
   </tr>
 </table>
 
-## Tech stack
+## Tech Stack
 
 - **Python + OpenCV** for webcam capture and MJPEG streaming.
 - **MediaPipe Tasks** for pose landmark detection
@@ -68,13 +80,10 @@ web_pose_server.py
 - **ElevenLabs Python SDK** for optional spoken coaching
 - **Vanilla browser JS/CSS inside the served HTML** for the UI
 
-## Project structure
+## Project Structure
 
 ```text
 web_pose_server.py         Main local pose server with exercise coaching.
 pose_landmarker_lite.task  MediaPipe pose model used by the Python flow.
 mediapipe_handler.py       Skeleton standalone Python camera script.
 ```
-
-
-![Screenshot 3](https://github.com/AndrewLu-1/Gym_bro/blob/main/Screenshot%203.png)
