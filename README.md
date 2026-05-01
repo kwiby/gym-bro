@@ -4,6 +4,8 @@
 
 # Gym Bro - A [ConHacks 2026](https://conhacks.io/) Hackathon Project
 
+**Dev Post:** https://devpost.com/software/gym-bro-m23hli?ref_content=my-projects-tab&ref_feature=my_projects
+
 While working out, have you ever felt that your form had less structural integrity than a piece of wet toast? Well, worry no more for we have a solution, Gym Bro!
 ![Screenshot 1](https://github.com/AndrewLu-1/Gym_bro/blob/main/Screenshot%201.png)
 
