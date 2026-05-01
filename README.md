@@ -6,6 +6,10 @@
 
 **Devpost:** https://devpost.com/software/gym-bro-m23hli?ref_content=my-projects-tab&ref_feature=my_projects
 
+**Built By:** [Moxin Guo](https://github.com/kwiby), [Andrew Lu](https://github.com/AndrewLu-1), [Jason Park](https://github.com/jasonpark2987-sys), [Michael Liu](https://github.com/m07liu)
+
+##
+
 While working out, have you ever felt that your form had less structural integrity than a piece of wet toast? Well, worry no more for we have a solution, Gym Bro!
 ![Screenshot 1](https://github.com/AndrewLu-1/Gym_bro/blob/main/Screenshot%201.png)
 
@@ -25,7 +29,9 @@ Gym Bro is a workout coaching website that uses your webcam to analyze your work
 - MediaPipe pose landmarker for pose tracking.
 - Python http.server for the local web server.
 - HTML/CSS/JavaScript for the browser UI.
-- **ElevenLabs** text-to-speech for live voice coaching.
+- ElevenLabs text-to-speech for live voice coaching.
+
+##
 
 **Architecture:**
 - Python manages the webcam and pose processing.
@@ -33,8 +39,6 @@ Gym Bro is a workout coaching website that uses your webcam to analyze your work
 - The annotated feed is streamed into the browser.
 - A JSON endpoint exposes exercise state, rep counts, combo state, and feedback.
 - The browser renders the live UI and handles optional voice playback.
-
-    </td>
 
     <!-- RIGHT COLUMN -->
     <td style="border: none; vertical-align: top;">
@@ -57,6 +61,8 @@ Gym Bro is a workout coaching website that uses your webcam to analyze your work
 4. Perform exactly one full rep.
 5. The app locks the feedback for that rep on screen until you start another check.
 
+##
+
 ### Combo Session
 1. Select an exercise.
 2. Choose a session length: `1 minute` or `2 minutes`.
@@ -65,27 +71,9 @@ Gym Bro is a workout coaching website that uses your webcam to analyze your work
 5. A good rep adds to the combo if the next good rep lands within 5 seconds.
 6. The UI shows live combo, session best, time remaining, and separate high scores for each session length.
 
-    </td>
-
     <!-- RIGHT COLUMN -->
     <td style="border: none; vertical-align: top;">
       <img src="https://github.com/AndrewLu-1/Gym_bro/blob/main/Screenshot%202.png" width="250">
     </td>
   </tr>
 </table>
-
-## Tech Stack
-
-- **Python + OpenCV** for webcam capture and MJPEG streaming.
-- **MediaPipe Tasks** for pose landmark detection
-- **Standard library HTTP server** for the local web app
-- **ElevenLabs Python SDK** for optional spoken coaching
-- **Vanilla browser JS/CSS inside the served HTML** for the UI
-
-## Project Structure
-
-```text
-web_pose_server.py         Main local pose server with exercise coaching.
-pose_landmarker_lite.task  MediaPipe pose model used by the Python flow.
-mediapipe_handler.py       Skeleton standalone Python camera script.
-```
