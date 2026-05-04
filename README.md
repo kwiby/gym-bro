@@ -4,7 +4,7 @@
 
 # Gym Bro - A [ConHacks 2026](https://conhacks.io/) Hackathon Project
 
-**Devpost:** https://devpost.com/software/gym-bro-m23hli?ref_content=my-projects-tab&ref_feature=my_projects
+**Devpost:** https://devpost.com/software/gym-bro-m23hli
 
 **Built By:** [Moxin Guo](https://github.com/kwiby), [Andrew Lu](https://github.com/AndrewLu-1), [Jason Park](https://github.com/jasonpark2987-sys), [Michael Liu](https://github.com/m07liu)
 
